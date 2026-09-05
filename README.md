@@ -14,7 +14,7 @@
 
 ## Структура проекта
 
-```
+```markdown
 viral-target-optimizer/
 ├── data/
 │   ├── target_virus_proteins.json  # Входные данные: профили мишеней, извлечённые из литературы
