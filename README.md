@@ -88,4 +88,3 @@ viral-target-optimizer/
 
 - **Книга**: *Principles of Virology*, 4th Edition (2 Vol set) by S. Jane Flint, Lynn W. Enquist, Vincent R. Racaniello, Glenn F. Rall, Anna-Marie Skalka.
 - **Математический фреймворк**: Conditional Gradient Methods & Projected Gradient Descent, Advanced Numerical Optimization Syllabus by D. Merkulov (HSE University / MIPT). URL: https://github.com/MerkulovDaniil/hse26/blob/main/lectures/12.md.
-```
