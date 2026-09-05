@@ -13,41 +13,32 @@ def main():
         for target in targets:
             virus = target["virus_name"]
             protein = target["target_protein"]
-            
             t_logp = target["ideal_inhibitor_properties"]["target_logp"]
             t_mw = target["ideal_inhibitor_properties"]["target_mw"]
             
-            # Запуск математического поиска
-            opt_logp, opt_mw, loss = optimize_parameters(t_logp, t_mw)
+            # Запуск оптимизации с получением метрики
+            opt_logp, opt_mw, loss, metrics = optimize_parameters(t_logp, t_mw)
             
-            # Формирование строки для вывода в консоль
+            # Добавляем данные в таблицу (сравнение шагов)
+            steps_comparison = f"L-step: {metrics['steps_theory']} vs Static: {metrics['steps_heuristic']}"
+            efficiency = f"+{metrics['efficiency_gain_pct']}%" if metrics['efficiency_gain_pct'] >= 0 else f"{metrics['efficiency_gain_pct']}%"
+            
             results_table.append([
-                virus, protein, f"{t_logp} / {t_mw}", f"{opt_logp} / {opt_mw}", loss
+                virus, protein, f"{t_logp} / {t_mw}", f"{opt_logp} / {opt_mw}", steps_comparison, efficiency
             ])
             
-            # Формирование структуры для экспорта в JSON
             json_results_log.append({
                 "virus_name": virus,
                 "target_protein": protein,
-                "target_properties": {
-                    "logp": t_logp,
-                    "mw": t_mw
-                },
-                "optimized_properties": {
-                    "logp": opt_logp,
-                    "mw": opt_mw
-                },
+                "metrics_comparison": metrics,
                 "final_loss": loss
             })
             
-        # Вывод таблицы в терминал
-        headers = ["Вирус", "Белок-мишень", "Цель (LogP/MW)", "Найдено (LogP/MW)", "Ошибка (Loss)"]
+        headers = ["Вирус", "Белок-мишень", "Цель (LogP/MW)", "Найдено (LogP/MW)", "Итерации (Теория vs Эвристика)", "Ускорение"]
         print(tabulate(results_table, headers=headers, tablefmt="grid"))
         
-        # Сохранение результатов в файл
-        output_path = "data/optimization_results.json"
-        save_optimization_results(json_results_log, filepath=output_path)
-        print(f"\nРезультаты расчетов успешно сохранены в файл: {output_path}")
+        save_optimization_results(json_results_log)
+        print(f"\nРезультаты расчетов и бенчмарк успешно сохранены.")
         
     except Exception as e:
         print(f"Ошибка выполнения скрипта: {e}")
