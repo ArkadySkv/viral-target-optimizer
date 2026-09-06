@@ -70,7 +70,6 @@ def optimize_parameters(target_logp, target_mw):
     # 3. Базовый статический шаг (lr = 0.05) -> Самый медленный базовый контур
     state_heuristic, steps_heuristic = run_scaled_pgd(target_logp, target_mw, learning_rate=0.05, method="static")
     
-    # Исправлено: заменена неопределенная переменная steps_intern на корректную steps_nesterov
     if steps_heuristic > 0:
         nesterov_gain_pct = ((steps_heuristic - steps_nesterov) / steps_heuristic) * 100
     else:
@@ -83,5 +82,4 @@ def optimize_parameters(target_logp, target_mw):
         "nesterov_gain_pct": round(nesterov_gain_pct, 1)
     }
 
-    # Исправлено: убран ошибочный вызов словаря как функции
     return round(state_theory[0], 2), round(state_theory[1], 1), round(loss_theory, 5), metric_summary
