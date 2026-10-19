@@ -1,85 +1,125 @@
+# src/optimizer.py
+"""Implement Projected Gradient Descent and Nesterov Acceleration for AIDD.
+
+Optimize chemical descriptor vectors towards viral target profiles while
+enforcing Lipinski's Rule of Five via orthogonal mathematical projections.
+"""
+
 import numpy as np
+from rdkit import Chem
+from rdkit.Chem import Descriptors
 
-def calculate_loss(current_logp, current_mw, target_logp, target_mw):
-    error_logp = (current_logp - target_logp) ** 2
-    error_mw = ((current_mw - target_mw) / 100) ** 2
-    return error_logp + error_mw
 
-def run_scaled_pgd(target_logp, target_mw, learning_rate, method="static", eps=1e-5, max_iter=2000):
-    """
-    Выполняет условную оптимизацию в нормированном пространстве признаков.
-    Поддерживает три режима: 'static' (базовый PGD), 'theory' (L-step) и 'nesterov' (ускорение NAG).
-    """
-    min_logp, max_logp = -2.0, 6.0
-    min_mw, max_mw = 150.0, 600.0
+class LipinskiProjectedOptimizer:
+    """Optimize drug descriptors using Projected Gradient Descent (PGD)."""
 
-    current_state = np.array([
-        (min_logp + max_logp) / 2.0,
-        ((min_mw + max_mw) / 2.0) / 100.0
-    ])
+    def __init__(self, target_logp: float, target_mw: float):
+        """Initialize optimizer with virus-specific chemical targets.
 
-    target = np.array([target_logp, target_mw / 100.0])
-    min_bounds = np.array([min_logp, min_mw / 100.0])
-    max_bounds = np.array([max_logp, max_mw / 100.0])
-
-    # Переменные для метода Нестерова
-    v = np.zeros(2)
-    momentum = 0.9
-    
-    iterations_taken = 0
-    
-    for i in range(max_iter):
-        if method == "nesterov":
-            # Шаг экстраполяции Нестерова (взгляд в будущее)
-            lookahead_state = current_state + momentum * v
-            grad = 2 * (lookahead_state - target)
-            
-            if np.linalg.norm(grad) < eps:
-                break
-                
-            v_next = momentum * v - learning_rate * grad
-            next_state = np.clip(current_state + v_next, min_bounds, max_bounds)
-            v = v_next
-        else:
-            # Стандартный шаг градиентного спуска
-            grad = 2 * (current_state - target)
-            if np.linalg.norm(grad) < eps:
-                break
-            intermediate_state = current_state - learning_rate * grad
-            next_state = np.clip(intermediate_state, min_bounds, max_bounds)
+        Args:
+            target_logp: Ideal partition coefficient for the target pocket.
+            target_mw: Ideal Molecular Weight for the target pocket.
+        """
+        self.target = np.array([target_logp, target_mw], dtype=float)
         
-        if np.linalg.norm(next_state - current_state) < eps:
-            break
-            
-        current_state = next_state
-        iterations_taken += 1
+        # Определяем границы выпуклого множества X (Правила Липинского Ro5)
+        # Множество X: { LogP ∈ [-2.0, 5.0], MW ∈ [100.0, 500.0] }
+        self.bounds = np.array([[-2.0, 5.0], [100.0, 500.0]], dtype=float)
 
-    # Исправлено декодирование масштаба: умножаем на 100 только координату MW
-    final_state = current_state.copy()
-    final_state[1] = final_state[1] * 100.0
-    return final_state, iterations_taken
+    def _project_onto_lipinski_set(self, x: np.ndarray) -> np.ndarray:
+        """Apply orthogonal projection operator (Proj_X) onto Lipinski set.
 
-def optimize_parameters(target_logp, target_mw):
-    # 1. Теоретический оптимальный шаг (lr = 1/L = 0.5) -> Сходимость за 1 шаг
-    state_theory, steps_theory = run_scaled_pgd(target_logp, target_mw, learning_rate=0.5, method="theory")
-    loss_theory = calculate_loss(state_theory[0], state_theory[1], target_logp, target_mw)
+        Clip the descriptor vector to keep it inside mathematically and
+        physically acceptable drug-likeness boundaries.
+        """
+        # Оператор проекции на гиперпараллелепипед — это поэлементный клиппинг
+        return np.clip(x, self.bounds[:, 0], self.bounds[:, 1])
 
-    # 2. Ускоренный метод Нестерова (lr = 0.05) -> Сходится быстрее статического за счет импульса
-    state_nesterov, steps_nesterov = run_scaled_pgd(target_logp, target_mw, learning_rate=0.05, method="nesterov")
+    def compute_loss_and_gradient(self, x: np.ndarray) -> tuple:
+        """Calculate MSE loss and analytical gradient vector.
 
-    # 3. Базовый статический шаг (lr = 0.05) -> Самый медленный базовый контур
-    state_heuristic, steps_heuristic = run_scaled_pgd(target_logp, target_mw, learning_rate=0.05, method="static")
+        f(x) = 0.5 * ||x - x_target||^2
+        grad_f(x) = x - x_target
+        """
+        error = x - self.target
+        loss = 0.5 * np.sum(error ** 2)
+        gradient = error
+        return loss, gradient
+
+    def step_pgd(self, x_current: np.ndarray, lr: float = 0.1) -> tuple:
+        """Execute one pure Projected Gradient Descent iteration.
+
+        x_{k+1} = Proj_X ( x_k - lr * grad_f(x_k) )
+        """
+        loss, gradient = self.compute_loss_and_gradient(x_current)
+        
+        # Стандартный шаг градиентного спуска
+        x_next = x_current - lr * gradient
+        
+        # Применение оператора проекции (каноны fmin.xyz / hse26)
+        x_projected = self._project_onto_lipinski_set(x_next)
+        
+        return x_projected, loss
+
+    def step_nesterov_pgd(
+        self, x_k: np.ndarray, v_k: np.ndarray, epoch: int, lr: float = 0.1
+    ) -> tuple:
+        """Execute one Nesterov Accelerated Projected Gradient step (NAG-PGD).
+
+        Yумный импульс Нестерова с последующей проекцией на множество ограничений.
+        """
+        # Вычисляем коэффициент затухания импульса ( HSE Выпуклый анализ )
+        momentum = epoch / (epoch + 3.0)
+        
+        # Экстраполяция точки (шаг по направлению накопленной скорости)
+        y_k = x_k + momentum * v_k
+        
+        loss, gradient = self.compute_loss_and_gradient(y_k)
+        
+        # Градиентный шаг из экстраполированной точки и наложение проекции
+        x_next = self._project_onto_lipinski_set(y_k - lr * gradient)
+        
+        # Обновление вектора скорости (направления импульса)
+        v_next = x_next - x_k
+        
+        return x_next, v_next, loss
+
+
+def validate_molecule_descriptors(smiles: str) -> tuple:
+    """Extract real physical chemical descriptors from a SMILES string.
+
+    Args:
+        smiles: Canonical SMILES representation of the compound.
+
+    Returns:
+        Tuple of (calculated_logp, calculated_mw).
+    """
+    mol = Chem.MolFromSmiles(smiles)
+    if mol is None:
+        raise ValueError(f"Syntax error parsing SMILES: {smiles}")
+    return Descriptors.MolLogP(mol), Descriptors.MolWt(mol)
+
+
+if __name__ == "__main__":
+    print("=== Тестирование хемоинформационного PGD / NAG оптимизатора ===")
     
-    if steps_heuristic > 0:
-        nesterov_gain_pct = ((steps_heuristic - steps_nesterov) / steps_heuristic) * 100
-    else:
-        nesterov_gain_pct = 0.0
-
-    metric_summary = {
-        "steps_theory": steps_theory,
-        "steps_nesterov": steps_nesterov,
-        "steps_heuristic": steps_heuristic,
-        "nesterov_gain_pct": round(nesterov_gain_pct, 1)
-    }
-
-    return round(state_theory[0], 2), round(state_theory[1], 1), round(loss_theory, 5), metric_summary
+    # Вирусологическая мишень: Главная протеаза SARS-CoV-2 Mpro (Цель: 2.5 / 410.0)
+    target_logp, target_mw = 2.5, 410.0
+    optimizer = LipinskiProjectedOptimizer(target_logp, target_mw)
+    
+    x_init = np.array([6.5, 550.0], dtype=float)
+    
+    x_start = optimizer._project_onto_lipinski_set(x_init)
+    print(f"Стартовая точка после Proj_X (Ro5): LogP={x_start[0]:.1f}, MW={x_start[1]:.1f}")
+    
+    x_k = x_start
+    v_k = np.zeros_like(x_k)
+    
+    print("\nЗапуск итерационного процесса схождения Нестерова...")
+    for epoch in range(1, 6):
+        x_k, v_k, loss_val = optimizer.step_nesterov_pgd(x_k, v_k, epoch, lr=0.2)
+        print(f"[Эпоха {epoch}] Текущие дескрипторы: LogP={x_k[0]:.2f}, MW={x_k[1]:.2f} | Loss: {loss_val:.4f}")
+        
+    # Валидируем реальную молекулу (Парацетамол из PubChem) через RDKit
+    real_logp, real_mw = validate_molecule_descriptors("CC(=O)NC1=CC=C(C=C1)O")
+    print(f"\n[RDKit Валидация] Настоящие свойства эталонного лиганда: LogP={real_logp:.2f}, MW={real_mw:.2f}")
